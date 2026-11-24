@@ -1,0 +1,2 @@
+-- DB 스키마 (raw / mart / 사용자 테이블)
+-- 모든 raw 테이블에 source, collected_at 컬럼과 중복 방지 UNIQUE 키를 둡니다.

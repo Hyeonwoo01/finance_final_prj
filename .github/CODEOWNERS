@@ -1,0 +1,14 @@
+# 디렉터리별 담당자. 역할 분담이 확정되면 GitHub 아이디를 넣고 주석을 해제하세요.
+# 형식: <경로> @github-아이디
+
+# /pipeline/collect/   @데이터담당
+# /pipeline/process/   @데이터담당
+# /pipeline/llm/       @LLM담당
+# /ml/                 @ML담당
+# /backend/            @서비스담당
+# /frontend/           @서비스담당
+# /docker-compose.yml  @서비스담당
+
+# 스키마·공통 설정은 팀 전원 리뷰
+# /docs/schema.sql     @팀원1 @팀원2 @팀원3 @팀원4
+# /shared/             @팀원1 @팀원2 @팀원3 @팀원4

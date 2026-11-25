@@ -29,7 +29,7 @@ flowchart LR
 
     subgraph PIPE[배치 파이프라인 pipeline/ · ml/]
         P1[collect<br/>수집]
-        P2[process<br/>정제·계정 매핑·mart 생성<br/>주가 변동 위험 지표]
+        P2[process<br/>정제·계정 매핑·mart 생성<br/>주가 변동 위험 지표·시장 변동성 상태]
         P3[ml/src<br/>재무 위험 추론·확률 보정·SHAP]
         P4[llm<br/>공시 분류·요약·임베딩]
     end
@@ -74,12 +74,12 @@ flowchart LR
 | 구성요소 | 디렉터리 | 역할 | 입력 | 출력 |
 |---|---|---|---|---|
 | 수집 | `pipeline/collect/` | 외부 API 호출, 크롤링, 원본 적재 | 외부 데이터 | `raw_*` 테이블 |
-| 정제·지표 | `pipeline/process/` | 계정과목 표준화, 업종 평균, 기업-시점별 변수 생성, 주가 변동 위험 지표·등급 계산 | `raw_*` | `mart_features`, `mart_market_risk` |
+| 정제·지표 | `pipeline/process/` | 계정과목 표준화, 업종 평균, 기업-시점별 변수 생성, 주가 변동 위험 지표·등급 계산, 시장 변동성 배너 상태 계산 | `raw_*` | `mart_features`, `mart_market_risk`, `mart_market_volatility` |
 | 재무 위험 모델 | `ml/src/` | 연 1회 학습, 주 1회 추론, 확률 보정, 등급 변환, 규칙 덮어쓰기, SHAP 요인 추출 | `mart_features`, 시장조치 | `mart_fin_risk`, `ml/models/` |
 | LLM 처리 | `pipeline/llm/` | 공시 위험 유형 분류·3줄 요약, 공시·보도자료 청킹·임베딩 | `raw_disclosures`, `raw_press_releases` | `mart_disclosure_labels`, `public_docs` |
 | 파이프라인 실행 | `pipeline/run_all.py` | 위 단계 순차 실행 | - | - |
 | Backend API | `backend/` | 포트폴리오 입력, 지표 조회, 포트폴리오 지표 계산, 종합평가 리포트 생성·검증, RAG 챗봇, 세션·계정 관리 | DB, VectorDB, LLM API | JSON 응답 |
-| Frontend | `frontend/` | 메인(한 줄 결론·살펴볼 종목·2×2 위험 지도), 종목 상세, 플로팅 챗봇, 로그인 | Backend API | 화면 |
+| Frontend | `frontend/` | 메인(시장 변동성 배너·한 줄 결론·살펴볼 종목·2×2 위험 지도), 종목 상세, 플로팅 챗봇, 로그인 | Backend API | 화면 |
 | 공통 | `shared/` | 공통 스키마, 설정, 용어 사전 | - | - |
 | DB | `docker-compose.yml`의 `db` | PostgreSQL 16, Docker 볼륨 `db_data`로 영속화 | - | - |
 
@@ -94,10 +94,11 @@ flowchart LR
 | 3 | `collect_prices` | 일 | 일별 주가·시가총액, KOSPI 지수 수집 |
 | 4 | `collect_press` | 일 | 금융위원회(금융위원회 홈페이지), 재정경제부·공정거래위원회(정책브리핑), 금융감독원(보도자료 API, 소비자경보는 홈페이지), 한국거래소(홈페이지) 보도자료 수집 |
 | 5 | `build_mart_features` | 주 | 재무비율, 업종 평균(t 시점까지 공시된 기업만), 상장 규정 근접도, 공시 이벤트 변수, Merton 부도거리 |
-| 6 | `price_risk` | 주 | 상대 변동성, 하락 변동성, MDD, 베타, 거래대금, 시장조치 반영 → 5단계 등급 |
-| 7 | `score_financial_risk` | 주 (학습은 연 1회) | 보정 확률 → 4단계 등급, 규칙 덮어쓰기, 여유 구간 적용, 모델 버전 기록 |
-| 8 | `classify_disclosures` | 일 | 위험 유형 분류·요약 (LLM) |
-| 9 | `embed_documents` | 일 | 위험 유형 공시·보도자료 청크 임베딩 → `public_docs` |
+| 6 | `price_risk` | 주 | 변동성(120거래일 일별 수익률 표준편차), 하락 변동성, MDD, 베타, 거래대금, 시장조치 반영 → 5단계 등급 |
+| 7 | `market_volatility` | 일 | KOSPI 20거래일 변동성 계산, 과거 10년 분포 기준으로 주의·경고·해제 판정, 최근 7일 이력 집계 → `mart_market_volatility` |
+| 8 | `score_financial_risk` | 주 (학습은 연 1회) | 보정 확률 → 4단계 등급, 규칙 덮어쓰기, 여유 구간 적용, 모델 버전 기록 |
+| 9 | `classify_disclosures` | 일 | 위험 유형 분류·요약 (LLM) |
+| 10 | `embed_documents` | 일 | 위험 유형 공시·보도자료 청크 임베딩 → `public_docs` |
 
 - 모든 변수는 공시일 기준으로 정렬해 t 시점 이전 정보만 사용 (라벨 누수 방지)
 - 수집 단계별 실패 로그를 남기고, 실패한 단계 이후의 mart는 직전 값 유지
@@ -115,13 +116,13 @@ sequenceDiagram
     U->>F: 보유 종목·수량 입력 (또는 CSV)
     F->>B: 포트폴리오 전송
     B->>B: 수량 → 비중(%) 변환, 세션에 저장
-    B->>DB: 종목별 mart_fin_risk, mart_market_risk,<br/>mart_disclosure_labels 조회
+    B->>DB: 종목별 mart_fin_risk, mart_market_risk,<br/>mart_disclosure_labels 조회<br/>최신 mart_market_volatility 조회
     B->>B: 포트폴리오 지표 계산<br/>(위험 노출 비중, HHI, 변동성·MDD·베타, 상관)
     B->>B: 살펴볼 종목 선정 (F-26 기준)
     B->>L: 지표 JSON + 종목 위험 요인만 전송
     L-->>B: 종합평가 문장
     B->>B: 수치 일치 검증, 금칙어 필터<br/>(실패 시 재생성 또는 템플릿 문장)
-    B-->>F: 결론·카드·2×2·지표·리포트
+    B-->>F: 배너 상태·결론·카드·2×2·지표·리포트
     F-->>U: 메인 화면 표시
     opt 로그인 사용자가 저장
         B->>DB: user_portfolios, user_reports 저장
@@ -166,7 +167,7 @@ sequenceDiagram
 | 계층 | 저장 위치 | 대상 |
 |---|---|---|
 | raw | PostgreSQL | `raw_financials`, `raw_disclosures`, `raw_prices`, `raw_delisting`, `raw_press_releases`. 모두 `source`, `collected_at` 컬럼과 UNIQUE 키 |
-| mart | PostgreSQL | `mart_features`, `mart_fin_risk`, `mart_market_risk`, `mart_disclosure_labels` |
+| mart | PostgreSQL | `mart_features`, `mart_fin_risk`, `mart_market_risk`, `mart_market_volatility`, `mart_disclosure_labels` |
 | 사용자 | PostgreSQL | `users`(닉네임, 비밀번호 해시), `user_portfolios`(종목·비중), `user_reports`(지표 JSON, 본문, 검증 결과). 로그인 사용자만 |
 | 공용 문서 | VectorDB `public_docs` | 공시·보도자료 청크. 메타데이터 `source_type`, `corp_code`, `published_at`, `title`, `url` |
 | 개인 문서 | VectorDB `user_docs` | 로그인 사용자 리포트 청크. 메타데이터 `user_id`, `generated_by` 필수 |

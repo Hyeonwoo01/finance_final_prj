@@ -22,7 +22,7 @@ flowchart LR
         S1[DART OpenAPI<br/>재무제표·공시]
         S2[공공데이터포털<br/>주가·기업정보]
         S3[KRX KIND<br/>관리종목·시장조치]
-        S4[금융위·금감원·거래소<br/>보도자료]
+        S4[금융위·금감원·거래소<br/>정부·정책 보도자료]
         S5[한국은행 ECOS<br/>국고채 금리]
         S6[FinanceDataReader<br/>KOSPI·상장폐지]
     end
@@ -92,7 +92,7 @@ flowchart LR
 | 1 | `collect_dart` | 일 (재무제표는 분기) | 재무제표, 공시 목록·원문 수집 |
 | 2 | `collect_kind` | 일 | 관리종목·상장폐지 사유, 시장조치, 거래정지 이력 수집 |
 | 3 | `collect_prices` | 일 | 일별 주가·시가총액, KOSPI 지수 수집 |
-| 4 | `collect_press` | 일 | 금융위·금감원·거래소 보도자료 수집 |
+| 4 | `collect_press` | 일 | 금융위·금감원·거래소 보도자료, 정부·정책 보도자료(정책브리핑, 재정경제부 API) 수집 |
 | 5 | `build_mart_features` | 주 | 재무비율, 업종 평균(t 시점까지 공시된 기업만), 상장 규정 근접도, 공시 이벤트 변수, Merton 부도거리 |
 | 6 | `price_risk` | 주 | 상대 변동성, 하락 변동성, MDD, 베타, 거래대금, 시장조치 반영 → 5단계 등급 |
 | 7 | `score_financial_risk` | 주 (학습은 연 1회) | 보정 확률 → 4단계 등급, 규칙 덮어쓰기, 여유 구간 적용, 모델 버전 기록 |
@@ -165,7 +165,7 @@ sequenceDiagram
 
 | 계층 | 저장 위치 | 대상 |
 |---|---|---|
-| raw | PostgreSQL | `raw_financials`, `raw_disclosures`, `raw_prices`, `raw_delisting`, `raw_press_releases`, `raw_news`. 모두 `source`, `collected_at` 컬럼과 UNIQUE 키 |
+| raw | PostgreSQL | `raw_financials`, `raw_disclosures`, `raw_prices`, `raw_delisting`, `raw_press_releases`. 모두 `source`, `collected_at` 컬럼과 UNIQUE 키 |
 | mart | PostgreSQL | `mart_features`, `mart_fin_risk`, `mart_market_risk`, `mart_disclosure_labels` |
 | 사용자 | PostgreSQL | `users`(닉네임, 비밀번호 해시), `user_portfolios`(종목·비중), `user_reports`(지표 JSON, 본문, 검증 결과). 로그인 사용자만 |
 | 공용 문서 | VectorDB `public_docs` | 공시·보도자료 청크. 메타데이터 `source_type`, `corp_code`, `published_at`, `title`, `url` |

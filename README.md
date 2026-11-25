@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.webp" alt="Stock Canary 로고" width="360"></p>
+
 # Stock Canary (finance_final_prj)
 
 주식을 잘 모르지만 관심이 있는 직장인 초보 투자자가 **주 1회** 들어와, 보유 종목과 포트폴리오의 위험을 **재무 위험**과 **주가 변동 위험** 두 축으로 점검하고, 공시·보도자료·내 평가 이력을 근거로 질문할 수 있는 서비스입니다.

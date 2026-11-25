@@ -5,6 +5,7 @@
 - 입력
   - KIND 관리종목 지정 공시: `data/raw/kind/managed_disclosures.csv` (`pipeline/collect/kind_managed_disclosures.py`로 수집)
   - 상장폐지 목록: FinanceDataReader `KRX-DELISTING`
+  - "상장폐지사유 발생" 지정 건의 감사의견: `data/raw/dart/audit_opinions_delisting_reason.csv` (`pipeline/collect/dart_audit_opinions.py`로 수집)
 - 실행: 저장소 루트에서 `.venv/Scripts/python ml/notebooks/label_count.py`
 """
 from pathlib import Path
@@ -14,6 +15,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 KIND_PATH = ROOT / 'data' / 'raw' / 'kind' / 'managed_disclosures.csv'
+AUDIT_PATH = ROOT / 'data' / 'raw' / 'dart' / 'audit_opinions_delisting_reason.csv'
 SNAPSHOT_YEARS = range(2016, 2026)
 
 # 사유 분류 규칙: 위에서부터 먼저 맞는 규칙 하나를 적용 (사유가 여러 개면 앞쪽 규칙 우선)
@@ -53,6 +55,11 @@ def load_designations():
     kind = kind[kind['type'].isin(['관리종목지정', '관리종목지정사유추가'])].copy()
     kind['reason'] = title[kind.index].str.extract(r'\((.*)\)\s*$')[0].fillna(kind['body_reason'])
     kind['category'] = kind['reason'].map(classify)
+    # "상장폐지사유 발생" 지정 중 직전 보고서 감사의견이 비적정이면 감사의견(③) 분류로 변경
+    if AUDIT_PATH.exists():
+        audit = pd.read_csv(AUDIT_PATH, dtype=str).set_index('acpt_no')['opinion_group']
+        non_clean = kind['acpt_no'].map(audit).eq('비적정')
+        kind.loc[(kind['category'] == '상장폐지사유 발생') & non_clean, 'category'] = '감사의견'
     kind['date'] = pd.to_datetime(kind['time']).dt.normalize()
     return kind[['date', 'stock_code', 'corp', 'market', 'type', 'reason', 'category']]
 

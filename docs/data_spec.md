@@ -4,6 +4,8 @@
 |---|---|---|---|---|---|
 | 금융위원회 보도자료 | 금융위원회 홈페이지 (`www.fsc.go.kr/no010101`) | 크롤링 | 게시물 번호, 제목, 등록일, 담당부서, 본문(HTML), 첨부(HWPX·PDF) | 일 | 금융위원회 저작권정책: 비상업 자유이용, 출처 표시 |
 | 정부·정책 보도자료 (재정경제부, 공정거래위원회) | 정책브리핑 (`www.korea.kr/briefing/pressReleaseList.do`) | 크롤링 | newsId, 제목, 등록일, 부처명, 본문(첨부 PDF에서 추출), 첨부(HWPX·PDF) | 일 | 텍스트에 한해 공공누리 제1유형(출처 표시) |
+| 금융감독원 보도자료 | 금융감독원 보도자료 API | API | contentId, 제목, 발행기관, 원문 URL, 등록일, 첨부 URL·파일명, 본문 텍스트 | 일 | 금융감독원 저작권 정책 (아래 참고) |
+| 금융감독원 소비자경보 | 금융감독원 홈페이지 (`www.fss.or.kr/fss/bbs/B0000175/list.do?menuNo=200204`) | 크롤링 | nttId, 제목, 등록일, 담당부서, 본문(HTML), 첨부(PDF) | 일 | 금융감독원 저작권 정책 (아래 참고) |
 
 ## 보도자료 수집 상세
 
@@ -30,6 +32,21 @@
 | 중복 방지 키 | `source` + newsId |
 | robots.txt | 전체 허용 (Googlebot의 통합검색만 제외) |
 | RSS | 확인되지 않음 |
+
+### 금융감독원
+
+| 항목 | 내용 |
+|---|---|
+| 보도자료 API | `https://www.fss.or.kr/fss/kr/openApi/api/bodoInfo.jsp?apiType=json&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&authKey=<인증키>` |
+| 요청 변수 | `apiType`(xml·json), `startDate`, `endDate`, `authKey`(32자리). 모두 필수 |
+| 응답 항목 | `contentId`, `subject`, `publishOrg`, `originUrl`, `viewCnt`, `regDate`, `atchfileUrl`, `atchfileNm`(첨부는 `\|` 구분), `contentsKor`(본문 텍스트) |
+| 인증키 | 금융감독원 홈페이지 OPEN API > 인증키 신청 (`/fss/api/apiKey/forInsert.do?menuNo=200273`), 개인·법인 구분. 이용약관 동의 필요. `.env`의 `FSS_API_KEY` |
+| 중복 방지 키 | `source` + contentId |
+| 소비자경보 목록 | `https://www.fss.or.kr/fss/bbs/B0000175/list.do?menuNo=200204&sdate=YYYY-MM-DD&edate=YYYY-MM-DD&pageIndex=N` |
+| 소비자경보 상세 | `https://www.fss.or.kr/fss/bbs/B0000175/view.do?nttId=<nttId>&menuNo=200204`. 본문 HTML 제공 |
+| 소비자경보 범위 | 미정 (투자 관련 경보만 또는 전체). 보이스피싱 등 일반 금융사기 경보 다수 포함 |
+| robots.txt | 네이버 수집기(Yeti)만 일부 경로 제한. 보도자료·소비자경보 경로 제한 없음 |
+| 저작권 | 비영리 개인 이용, 교육·연구 목적의 정당한 범위 인용 가능, 출처 표시 필수, 내용 무단 변경 금지. **다른 사이트에서 홈페이지 저작물을 직접 링크하는 경우 금융감독원에 링크 사실 통지 필요** (챗봇 출처 카드의 원문 링크 해당) |
 
 ### 공통
 

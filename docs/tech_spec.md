@@ -20,9 +20,9 @@ Nov 25, 2026 · @안현우
 | 경로 | 상태 |
 | --- | --- |
 | `pipeline/run_all.py` | 실행 골격만 존재. 단계 목록 `STEPS`는 전부 주석 |
-| `docker-compose.yml` | `db`(postgres:16)만 활성. backend·frontend는 주석 |
+| `docker-compose.yml` | `db`(pgvector/pgvector:pg16)는 기본 실행. backend·frontend는 `app` 프로필, pipeline은 `batch` 프로필로 정의만 있고 Dockerfile 미작성 |
 | `docs/data_spec.md` | 보도자료 4개 출처 수집 상세, KIND·한국거래소 수집 확인 결과, 라벨 정의와 상장폐지 사유 집계, 부실 라벨 건수 집계(최근 10년), DART·금융위 주식시세정보·FinanceDataReader 시험 결과, 용도별 데이터 기간 작성됨 |
-| `docs/schema.sql` | 주석 2줄. 테이블 정의 없음 |
+| `docs/schema.sql` | 테이블 28개 초안 (raw 11, mart 10, 사용자·세션 5, 벡터 2). db 첫 실행 때 자동 적용 |
 | `docs/requirements.md`, `test_cases.md`, `experiments.md` | 표 머리글만 존재 |
 | `pipeline/collect/` | 데이터 확인용 스크립트 5개 (DART 시험 호출, 금융위 시세 시험, 폐지 종목 주가 수신, KIND 관리종목 지정 공시 수집, DART 감사의견 조회). 운영용 수집 단계는 아님 |
 | `ml/notebooks/` | `label_count.py` (부실 라벨 건수 집계) |

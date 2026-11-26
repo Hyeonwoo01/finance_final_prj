@@ -95,7 +95,7 @@ flowchart LR
 | 4 | `collect_press` | 일 | 금융위원회(금융위원회 홈페이지), 재정경제부·공정거래위원회(정책브리핑), 금융감독원(보도자료 API, 소비자경보는 홈페이지), 한국거래소(홈페이지) 보도자료 수집 |
 | 5 | `build_mart_features` | 주 | 재무비율, 업종 평균(t 시점까지 공시된 기업만), 상장 규정 근접도, 공시 이벤트 변수, Merton 부도거리 |
 | 6 | `price_risk` | 주 | 변동성(120거래일 일별 수익률 표준편차), 하락 변동성, MDD, 베타, 거래대금, 시장조치 반영 → 5단계 등급 |
-| 7 | `market_volatility` | 일 | KOSPI 20거래일 변동성 계산, 과거 10년 분포 기준으로 주의·경고·해제 판정, 최근 7일 이력 집계 → `mart_market_volatility` |
+| 7 | `market_volatility` | 주 (토요일 결산) | 그 주 마지막 거래일 기준 KOSPI 20거래일 변동성 계산, 주의(과거 10년 상위 10%)·경고(5.0%)·해제(상위 20%) 판정, 직전 결산 주 상태 기록 → `mart_market_volatility` |
 | 8 | `score_financial_risk` | 주 (학습은 연 1회) | 보정 확률 → 4단계 등급, 규칙 덮어쓰기, 여유 구간 적용, 모델 버전 기록 |
 | 9 | `classify_disclosures` | 일 | 위험 유형 분류·요약 (LLM) |
 | 10 | `embed_documents` | 일 | 위험 유형 공시·보도자료 청크 임베딩 → `public_docs` |

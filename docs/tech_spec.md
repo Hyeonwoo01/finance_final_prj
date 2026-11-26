@@ -33,6 +33,7 @@ Nov 25, 2026 · @안현우
 | 표기 | 의미 |
 | --- | --- |
 | 확정 | 저장소 파일에 이미 반영된 값 (예: `postgres:16`) |
+| 확정 (팀 결정) | 팀 결정으로 확정했으나 저장소 파일에는 아직 반영 전인 값 |
 | 초안 | 기획안 v3에 정의되었으나 팀 논의 대상 |
 | 제안 | 본 명세에서 새로 제시하는 안. 팀 합의 필요 |
 | 미정 | 근거 문서에서 결정되지 않은 항목 |
@@ -92,7 +93,16 @@ Stock Canary는 보유 종목과 포트폴리오의 위험을 재무 위험(ML, 
 
 > 그림: 시스템 구성도 (외부 데이터 6종, 배치 모듈 4개(10단계), 저장소 2종, 서비스 2종). 원본 문서의 그림은 저장소에 포함되지 않음. 같은 구성은 `docs/system_architecture.md` 구성도 참고
 
-파이프라인 결과는 PostgreSQL과 VectorDB에 적재되고, Backend는 이를 조회해 포트폴리오 지표와 챗봇 답변을 만듦. 파이프라인 실행 위치(EC2 cron 또는 로컬)는 미정이므로 EC2 경계 밖에 표시함. 특히 KIND 수집은 국내 IP 환경이 필요함.
+파이프라인 결과는 PostgreSQL(pgvector 포함)에 적재되고, Backend는 이를 조회해 포트폴리오 지표와 챗봇 답변을 만듦. 파이프라인은 혼합 방식으로 실행함: API 수집, 정제, 지표 계산, 주간 배치 추론, 임베딩은 EC2 cron에서 실행하고, KIND 수집은 국내 IP 환경(팀원 PC)에서 실행해 결과를 DB에 적재하며, 모델 학습은 로컬에서 수행한 뒤 모델 파일만 EC2로 이전함.
+
+```
+[브라우저] -> nginx (React 정적 파일 + /api 프록시)
+                -> FastAPI -- PostgreSQL 16 + pgvector (raw, mart, 사용자, 세션, 벡터)
+                        +-- OpenAI / Gemini API (종합평가 리포트, 챗봇)
+[EC2 cron]  수집(DART, 금융위, ECOS, 보도자료) -> 정제 -> 지표, 추론 -> 임베딩 -> DB
+[팀원 PC]   KIND 수집 -> DB 적재
+[로컬]      모델 학습 -> 모델 파일 -> EC2 배치 추론
+```
 
 ### 설계 원칙
 
@@ -109,32 +119,38 @@ Stock Canary는 보유 종목과 포트폴리오의 위험을 재무 위험(ML, 
 
 ## 4. 기술 스택
 
-저장소에서 버전까지 확정된 기술은 PostgreSQL 16뿐이며(FinanceDataReader는 데이터 확인에 0.9.202를 사용했으나 의존성 파일에는 미고정), 나머지는 기획안 기준 초안 또는 미정 상태임. 2주차 스키마·API 합의 전에 Python 및 주요 라이브러리 버전을 고정해야 함.
+저장소 파일에 반영된 기술은 PostgreSQL 16이며(FinanceDataReader는 데이터 확인에 0.9.202를 사용했으나 의존성 파일에는 미고정), 서비스 구성, 프론트엔드, VectorDB, 세션 저장소, 임베딩 선정 방식, 파이프라인 실행 위치는 팀 결정으로 확정함(확정 (팀 결정)). Python은 로컬 개발 환경과 같은 3.12로 맞추고, 나머지 라이브러리는 착수 시점의 최신 안정판을 컨테이너별 `requirements.txt`·`package.json`에 고정함.
 
 | 영역 | 기술 | 버전 | 적용 기능 | 상태 |
 | --- | --- | --- | --- | --- |
-| 언어 | Python | 미정 | 파이프라인, ML, backend 전체 | 초안 (버전 미정) |
+| 언어 | Python | 3.12 | 파이프라인, ML, backend 전체 | 확정 (팀 결정) |
 | 데이터 처리 | Pandas, NumPy | 미정 | 재무비율, 업종 집계, 변동성·MDD·HHI·상관, 시장 변동성 분위 | 초안 |
 | 통계 | SciPy | 미정 | 부실·정상 기업 t-검정, 업종별 카이제곱 검정 | 제안 |
 | 수집 | HTTP 클라이언트, HTML 파서 | 미정 | DART·공공데이터·ECOS·금감원 API 호출, KIND·보도자료 크롤링 (KIND는 POST 폼, 거래소는 일회용 코드 발급 후 조회) | 초안 (라이브러리 미정) |
 | 수집 | PDF·HWPX 텍스트 추출 | 미정 | 정책브리핑·한국거래소 보도자료 본문 (첨부에만 본문 존재) | 제안 |
 | 수집 보조 | FinanceDataReader | 0.9.202 (확인 버전) | KOSPI 지수(`KS11`, 2000년부터), 상장폐지 목록·사유(`KRX-DELISTING`), 2015년부터 과거 수정주가. 6자리 종목코드의 기본 출처는 네이버 증권 시세 | 초안 |
 | 수집 보조 | pykrx | 미정 | 보조 수단 (KRX 사이트 변경 이슈로 주력 제외) | 초안 |
-| DB | PostgreSQL | 16 | raw·mart·사용자 테이블 | 확정 |
-| DB 접근 | SQLAlchemy + psycopg | 미정 | 테이블 정의, `INSERT ... ON CONFLICT` upsert | 제안 |
+| DB | PostgreSQL | 16 | raw·mart·사용자·세션 테이블 | 확정 |
+| DB 접근 | SQLAlchemy 2 + psycopg 3 | 착수 시 고정 | 테이블 정의, `INSERT ... ON CONFLICT` upsert | 확정 (팀 결정) |
+| 스키마 이력 관리 | Alembic | 착수 시 고정 | 테이블 생성·변경 이력 관리 (마이그레이션) | 확정 (팀 결정) |
 | ML | scikit-learn | 미정 | 로지스틱 회귀, 확률 보정(isotonic·Platt), 평가 지표 | 초안 |
 | ML | LightGBM | 미정 | 재무 위험 주 모델 | 초안 |
 | ML | SHAP | 미정 | 재무 위험 요인 기여도 (F-05) | 초안 |
 | ML | Optuna | 미정 | 소규모 하이퍼파라미터 탐색 (수십 회) | 초안 |
 | LLM | OpenAI API, Gemini API | 모델 미정 | 공시 분류·요약, 소비자경보 분류, 종합평가 리포트, 챗봇 답변 | 초안 |
-| 임베딩 | OpenAI 또는 Gemini 임베딩 | 미정 | 공시·보도자료·리포트 청크 임베딩 | 미정 |
-| VectorDB | pgvector 또는 Chroma | 미정 | `public_docs`, `user_docs` | 미정 (후보 2개) |
-| Backend | FastAPI | 미정 | REST API, 세션, 리포트 생성, RAG | 초안 (예정) |
-| Frontend | 미정 | 미정 | 대시보드, 시장 변동성 배너, 플로팅 챗봇 | 미정 |
-| 비밀번호 해시 | Argon2id 또는 bcrypt | 미정 | `users.password_hash` | 제안 |
-| 컨테이너 | Docker, Docker Compose | 미정 | 서비스 실행 단위 | 확정 (db만 구성) |
-| 배포 | AWS EC2 | - | 외부 접속 서비스 | 확정 (과제 조건) |
-| 스케줄러 | cron | - | 일 단위 수집 (F-23) | 초안 (심화) |
+| LLM 호출 방식 | 공급자 SDK 직접 호출 (LangChain 미사용) | 착수 시 고정 | RAG 검색·프롬프트 구성·출처 검증을 직접 구현 | 확정 (팀 결정) |
+| 임베딩 | OpenAI `text-embedding-3-small` 또는 Gemini `gemini-embedding-001` | 비교 후 선정 | 공시·보도자료·리포트 청크 임베딩. 벡터 차원 1536 고정 | 확정 (팀 결정) (선정 방식) |
+| VectorDB | pgvector | PostgreSQL 16용 (`pgvector/pgvector:pg16`) | `public_docs`, `user_docs` | 확정 (팀 결정) |
+| Backend | FastAPI + Pydantic + Uvicorn | 착수 시 고정 | REST API, 세션, 리포트 생성, RAG | 확정 (팀 결정) |
+| 세션 저장소 | PostgreSQL `sessions` 테이블 | - | 체험 모드 데이터, 챗봇 대화 맥락, 로그인 상태 | 확정 (팀 결정) |
+| Frontend | React + Vite (JavaScript) | 착수 시 고정 | 대시보드, 시장 변동성 배너, 플로팅 챗봇 | 확정 (팀 결정) |
+| 차트 | Apache ECharts | 착수 시 고정 | 주가·등급 추이, 변동성·낙폭, 상관 히트맵, 방향성 확률 | 확정 (팀 결정) |
+| 스타일 | Tailwind CSS | 착수 시 고정 | 화면 레이아웃, 등급·배너 색상 | 확정 (팀 결정) |
+| 웹 서버 | nginx | 착수 시 고정 | React 빌드 결과 제공, `/api` 요청을 backend로 전달 | 확정 (팀 결정) |
+| 비밀번호 해시 | Argon2id (argon2-cffi) | 착수 시 고정 | `users.password_hash` | 확정 (팀 결정) |
+| 컨테이너 | Docker, Docker Compose | 미정 | 서비스 실행 단위 (db, backend, frontend + 배치용 pipeline) | 확정 (db만 구성) |
+| 배포 | AWS EC2 | 권장 t3.medium(메모리 4GB) 이상 | 외부 접속 서비스 | 확정 (과제 조건) |
+| 스케줄러 | cron (EC2) | - | 일 단위 수집, 토요일 주간 결산(F-29, F-30), 주간 배치 추론 | 확정 (팀 결정) |
 | 협업 | GitHub Issue·PR, CODEOWNERS | - | Issue → 브랜치 → PR → Merge | 확정 |
 
 ### 주요 선택 근거
@@ -146,9 +162,16 @@ Stock Canary는 보유 종목과 포트폴리오의 위험을 재무 위험(ML, 
 | 규칙 베이스라인·Merton·로지스틱·LightGBM 비교 | 기존 모형 대비 ML의 개선 폭을 성능 근거로 제시하기 위함 |
 | FE·BE 분리 (FastAPI) | 계정·서버 세션·플로팅 챗봇 구현에 유리. Streamlit은 플로팅 UI에 커스텀 컴포넌트 필요 |
 | 배치 사전 처리 + 조회 중심 서비스 | 실시간 LLM 호출을 종합평가·챗봇으로 한정해 비용과 EC2 부하를 제한 |
+| React + Vite (Next.js 미사용) | 화면이 대시보드, 배너, 플로팅 챗봇으로 구성되어 서버 렌더링이 불필요. 빌드 결과가 정적 파일이라 nginx 컨테이너 하나로 배포 가능 |
+| Apache ECharts | 상관 히트맵, 등급 추이, 낙폭 차트를 한 라이브러리로 구현 가능 |
+| 세션 저장소는 PostgreSQL | 서버 1대 규모라 Redis는 과함. 서버 메모리는 재시작 시 소실되고 다중 워커 간 공유 불가. 체험 데이터의 로그인 이관(F-03)을 같은 DB 안에서 처리 |
+| 임베딩은 비교 테스트 후 선정 | 공시·보도자료 질문 20\~30건의 검색 적중률을 비교해 선정 근거로 기록. 차원을 1536으로 고정해 어느 모델을 골라도 테이블 변경 없음 |
+| LLM SDK 직접 호출 | 출처 표시(F-14), 근거 부재 시 거절(F-16), 데이터 격리(F-17) 로직을 코드에서 직접 확인 가능 |
+| 파이프라인 혼합 실행 | KIND는 클라우드 IP 접속 차단 사례가 있어 국내 IP 환경에서 수집. 모델 학습은 1회성이므로 로컬에서 수행하고 EC2는 추론만 담당 |
+| Alembic | 스키마 변경을 이력으로 관리해 여러 팀원이 같은 DB 구조를 재현 가능 |
 | 금감원 보도자료는 API, 나머지 보도자료는 크롤링 | 확인한 출처 중 금감원만 보도자료 API 제공. 금융위 RSS는 확인 시점에 점검 중, 정책브리핑 RSS는 미확인, 거래소는 목록 조회 응답(JSON)을 직접 사용 |
 
-### VectorDB 선택 제안: pgvector
+### VectorDB 선택: pgvector
 
 - 기존 PostgreSQL 재사용으로 컨테이너·볼륨 추가 없음. 이미지만 pgvector 포함 이미지로 교체
 - `user_docs` 격리를 SQL `WHERE user_id = :session_user_id`로 강제 가능 (F-17)
@@ -393,6 +416,7 @@ def next_banner_state(vol: float, prev_state: str, th: dict[str, float]) -> str:
 | 임베딩 대상 | 최근 2\~3년 위험 유형 공시, 최근 5년 보도자료 |
 | 청크 메타데이터 | `source_type`, `corp_code`, `published_at`, `title`, `url` + 보도자료는 발행 기관, 업종·시장·키워드, 종목 직접 언급 여부 |
 | 청킹 | 전략 비교 후 확정 (트러블슈팅 소재로 기록) |
+| 임베딩 모델 | 후보 OpenAI `text-embedding-3-small`(1536차원), Gemini `gemini-embedding-001`(출력 차원 1536으로 축소). 공시·보도자료 질문 20\~30건의 검색 적중률 비교 후 선정, 결과는 `docs/experiments.md`에 기록 |
 
 ### 6-5. 포트폴리오 평가 (F-02, F-08\~F-10, F-26)
 
@@ -476,6 +500,7 @@ def next_banner_state(vol: float, prev_state: str, th: dict[str, float]) -> str:
 | 기능 | 명세 |
 | --- | --- |
 | 체험 모드 | 로그인 없이 시작. 포트폴리오·리포트·챗봇 대화는 서버 세션에만 보관, 종료·만료 시 삭제. 만료 시간 미정 |
+| 세션 저장 | PostgreSQL `sessions` 테이블 (세션 ID, 세션 데이터 JSONB, `user_id`, `expires_at`). 세션 ID는 `HttpOnly` 쿠키로 전달, 만료 세션은 배치에서 주기적으로 삭제 |
 | 가입·로그인 | 닉네임 + 비밀번호. 비밀번호는 해시 저장. 이메일·실명·전화번호 미수집 |
 | 세션 이관 | 로그인 시 사용자 확인 후 세션의 포트폴리오·리포트를 DB로 이관, 리포트는 `user_docs`에 임베딩 (T-11) |
 | 불러오기 | 재방문 시 저장된 포트폴리오 자동 로드 → 재평가 → 지난주 대비 변화 표시 |
@@ -739,13 +764,14 @@ python pipeline/run_all.py  # 현재는 STEPS가 비어 있음
 
 | 서비스 | 이미지·빌드 | 포트 | 실행 방식 | 영속화 |
 | --- | --- | --- | --- | --- |
-| `frontend` | `./frontend` 빌드 | 80 (외부 개방) | 상시 | - |
+| `frontend` | `./frontend` 빌드 (React 빌드 결과 + nginx, `/api` 프록시) | 80 (외부 개방) | 상시 | - |
 | `backend` | `./backend` 빌드 | 8000 (내부) | 상시 | - |
-| `db` | `postgres:16` (pgvector 채택 시 pgvector 포함 이미지) | 5432 (외부 미개방) | 상시 | `db_data` 볼륨 |
-| VectorDB | Chroma 채택 시에만 추가 | 내부 | 상시 | 별도 볼륨 |
-| `pipeline` | 저장소 루트 컨텍스트로 빌드 (`ml/` 포함) | - | 배치 (`docker compose run --rm pipeline`) | - |
+| `db` | `pgvector/pgvector:pg16` | 5432 (외부 미개방) | 상시 | `db_data` 볼륨 |
+| `pipeline` | 저장소 루트 컨텍스트로 빌드 (`ml/` 포함) | - | 배치 (EC2 cron에서 `docker compose run --rm pipeline`) | - |
 
 - 모든 상시 서비스 `restart: unless-stopped`. EC2 보안 그룹은 80(및 관리용 22)만 개방
+- EC2 권장 사양: t3.medium(메모리 4GB) 이상 (PostgreSQL + pgvector, FastAPI, nginx 동시 실행)
+- KIND 수집(`collect_kind`)은 EC2가 아닌 팀원 PC에서 실행해 DB에 적재. EC2에서 접속 가능하다고 확인되면 EC2 cron으로 이전
 - backend 이미지에는 ML 라이브러리 불필요 (SHAP 요인은 `mart_fin_risk`에 저장된 값을 문장화). 컨테이너별 의존성 파일 분리로 이미지 크기 축소
 - Python 버전과 의존성 버전은 컨테이너별 `requirements.txt`에 고정
 
@@ -754,7 +780,7 @@ python pipeline/run_all.py  # 현재는 STEPS가 비어 있음
 ```yaml
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -779,6 +805,14 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+
+  frontend:
+    build: ./frontend  # React 빌드 후 nginx 이미지에 복사
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
 
   pipeline:
     build:
@@ -892,7 +926,7 @@ volumes:
 
 | 항목 | 현재 설계 | 추가 제안 |
 | --- | --- | --- |
-| 계정 | 닉네임 + 비밀번호 해시, 이메일·실명 미수집 | Argon2id 또는 bcrypt, 로그인 시도 횟수 제한(닉네임·IP 기준). 복구 수단이 없으므로 가입 화면에 비밀번호 분실 시 복구 불가 안내 |
+| 계정 | 닉네임 + 비밀번호 해시, 이메일·실명 미수집 | Argon2id(argon2-cffi), 로그인 시도 횟수 제한(닉네임·IP 기준). 복구 수단이 없으므로 가입 화면에 비밀번호 분실 시 복구 불가 안내 |
 | 세션 | `SESSION_SECRET_KEY` 서명 서버 세션 | `HttpOnly`·`Secure`·`SameSite` 쿠키, 로그인 시 세션 ID 재발급(세션 고정 방지), CSRF 토큰 |
 | 데이터 격리 | 서버 세션의 `user_id`로 필터 강제 | 사용자 데이터 조회 함수가 `user_id`를 필수 인자로 받도록 저장소 계층에서 강제. T-07을 통합 테스트로 상시 실행 |
 | LLM 전송 범위 | 비중·지표·위험 요인만 | 전송 직전 페이로드를 허용 필드 목록으로 검사 |
@@ -905,14 +939,9 @@ volumes:
 
 | 항목 | 현재 상태 | 영향 범위 |
 | --- | --- | --- |
-| 서비스 구성 방식 | FastAPI + 프론트 분리 쪽으로 진행 중 | backend·frontend 구조, Dockerfile |
-| 프론트엔드 기술 | 미정 | 플로팅 챗봇, 배너, 차트 구현 방식 |
-| VectorDB | pgvector 또는 Chroma (본 명세 제안: pgvector) | 컨테이너 구성, 격리·삭제 정합성 |
-| 세션 저장소 | 미정. 서버 메모리는 재시작 시 소실되고 다중 워커 간 공유 불가 | 체험 모드, 챗봇 대화 유지 |
 | 세션 만료 시간, 이관 방식 | 미정 (자동 또는 사용자 확인) | 체험 모드, 로그인 흐름 |
-| 파이프라인 실행 위치 | EC2 cron 또는 로컬 실행 후 이전. KIND는 국내 IP 필요 | F-23, EC2 사양 |
 | EC2에서 KIND 접속 가능 여부 | 미확인 (클라우드 IP 차단 사례 확인됨, 팀원 PC 국내 IP에서는 접속·수집 확인) | `collect_kind` 실행 위치, F-26 ④ 반영 주기 |
-| 임베딩 모델 | OpenAI 또는 Gemini | 벡터 차원(컬럼 정의), 교체 시 전체 재임베딩 |
+| 임베딩 모델 최종 선정 | 후보 2개 비교 테스트 예정 (차원 1536 고정) | 검색 품질, 교체 시 전체 재임베딩 |
 | 재무 위험 라벨 | 실질심사 사유 포함 여부, 12·15개월 창 | 학습 표본, 성능 |
 | 사유 불명 실질심사 폐지 72건 | KIND 실질심사법인·횡령 등 목록과 대조 후 결정 | 라벨 ②·④ |
 | 라벨 검토 필요 분류 | 사유 불명 "상장폐지사유 발생" 323건, 정기보고서 미제출, 회생·파산·부도, 주가 미달의 양성 포함 여부 | 학습 표본, 성능 |
@@ -928,7 +957,7 @@ volumes:
 | 금감원 원문 링크 통지 | 통지 시점·방법 미정 | 챗봇 출처 카드 |
 | 포트폴리오 계산 기준 (비중 가격, 가중 확률 분모, 재조정 가정) | 기획안에 정의 없음 (본 명세 6-5 제안) | F-08\~F-10, 화면 지표 문구 |
 | LLM 공급자·모델·프롬프트 버전 관리 | OpenAI·Gemini 키만 정의, 모델과 버전 관리 방식 미정 | 분류 재처리 기준, 품질 재현성, 비용 |
-| EC2 인스턴스 사양 | 6주차 제공 예정, 사양 미확인 | 벡터 인덱스 메모리, 파이프라인 실행 위치 |
+| EC2 인스턴스 사양 | 6주차 제공 예정, 사양 미확인 (권장 t3.medium 이상) | 벡터 인덱스 메모리, 파이프라인 실행 위치 |
 
 ### 11-3. 알려진 한계와 대응
 

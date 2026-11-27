@@ -10,6 +10,7 @@ data/**
 ml/models/**
 !ml/models/.gitkeep
 *.csv
+!shared/listing_rules.csv
 *.parquet
 *.pkl
 *.joblib

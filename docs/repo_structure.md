@@ -12,9 +12,9 @@
 │   ├── guide/              #   과제 가이드, 평가 항목, 기획안
 │   └── wireframes/         #   화면 구성안
 ├── pipeline/               # 수집 → 정제 → LLM 처리 → 적재
-│   ├── collect/            #   DART, KIND, 주가, ECOS, 보도자료 수집
-│   ├── process/            #   정제, 계정 매핑, mart 테이블 생성, 주가 변동 위험 지표
-│   ├── llm/                #   공시 분류·요약, 임베딩 적재
+│   ├── collect/            #   DART, KIND, 주가, ECOS, 보도자료, 뉴스 수집
+│   ├── process/            #   정제, 계정 매핑, mart 테이블 생성, 주가 변동 위험 지표, 공포지수, 업종 대장주
+│   ├── llm/                #   공시 분류·요약, 뉴스 감성 분류, 임베딩 적재
 │   └── run_all.py          #   전체 파이프라인 순차 실행
 ├── ml/                     # 재무 위험 모델
 │   ├── notebooks/          #   EDA, 실험

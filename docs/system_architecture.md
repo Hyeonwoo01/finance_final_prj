@@ -7,7 +7,7 @@
 
 | 원칙 | 내용 |
 |---|---|
-| 사전 처리 | 외부 데이터 수집, 재무 위험 모델 추론, 주가 변동 위험 계산, 공시 LLM 분류·요약, 임베딩은 배치 파이프라인에서 미리 수행 후 DB·VectorDB에 저장 |
+| 사전 처리 | 외부 데이터 수집, 재무 위험 모델 추론, 주가 변동 위험 계산, 공시 LLM 분류·요약, 뉴스 감성 분류·공포지수 계산, 업종 대장주 선정, 임베딩은 배치 파이프라인에서 미리 수행 후 DB·VectorDB에 저장 |
 | 조회 중심 서비스 | 서비스는 저장된 결과를 조회. 실시간 LLM 호출은 종합평가 리포트 생성과 챗봇 답변으로 한정 |
 | 계층 독립성 | 수집·처리·서비스 계층을 독립 실행. 수집이 실패해도 서비스는 마지막으로 적재된 데이터로 동작 |
 | 재실행 안전성 | 파이프라인 각 단계는 upsert로 적재해 재실행 시 중복 적재 없음 (`pipeline/run_all.py`) |
@@ -25,13 +25,14 @@ flowchart LR
         S4[금융위·금감원·거래소<br/>정부·정책 보도자료]
         S5[한국은행 ECOS<br/>국고채 금리]
         S6[FinanceDataReader<br/>KOSPI·상장폐지]
+        S7[뉴스<br/>네이버 검색 API·빅카인즈]
     end
 
     subgraph PIPE[배치 파이프라인 pipeline/ · ml/]
         P1[collect<br/>수집]
-        P2[process<br/>정제·계정 매핑·mart 생성<br/>주가 변동 위험 지표·시장 변동성 상태]
+        P2[process<br/>정제·계정 매핑·mart 생성<br/>주가 변동 위험 지표·시장 변동성 상태<br/>공포지수·업종 대장주]
         P3[ml/src<br/>재무 위험 추론·확률 보정·SHAP]
-        P4[llm<br/>공시 분류·요약·임베딩]
+        P4[llm<br/>공시 분류·요약·뉴스 감성 분류·임베딩]
     end
 
     subgraph STORE[저장소]
@@ -47,7 +48,7 @@ flowchart LR
     LLM[LLM API<br/>OpenAI · Gemini]
     U((사용자))
 
-    S1 & S2 & S3 & S4 & S5 & S6 --> P1 --> D1
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> P1 --> D1
     D1 --> P2 --> D1
     D1 --> P3 --> D1
     D1 --> P4
@@ -74,13 +75,13 @@ flowchart LR
 | 구성요소 | 디렉터리 | 역할 | 입력 | 출력 |
 |---|---|---|---|---|
 | 수집 | `pipeline/collect/` | 외부 API 호출, 크롤링, 원본 적재 | 외부 데이터 | `raw_*` 테이블 |
-| 정제·지표 | `pipeline/process/` | 계정과목 표준화, 업종 평균, 기업-시점별 변수 생성, 주가 변동 위험 지표·등급 계산, 시장 변동성 배너 상태 계산 | `raw_*` | `mart_features`, `mart_market_risk`, `mart_market_volatility` |
+| 정제·지표 | `pipeline/process/` | 계정과목 표준화, 업종 평균, 기업-시점별 변수 생성, 주가 변동 위험 지표·등급 계산, 시장 변동성 배너 상태 계산, 공포지수 계산, 업종 대장주 선정 | `raw_*`, `mart_news_sentiment` | `mart_features`, `mart_market_risk`, `mart_market_volatility`, `mart_fear_index`, `mart_sector_leaders` |
 | 재무 위험 모델 | `ml/src/` | 연 1회 학습, 주 1회 추론, 확률 보정, 등급 변환, 규칙 덮어쓰기, SHAP 요인 추출 | `mart_features`, 시장조치 | `mart_fin_risk`, `ml/models/` |
-| LLM 처리 | `pipeline/llm/` | 공시 위험 유형 분류·3줄 요약, 공시·보도자료 청킹·임베딩 | `raw_disclosures`, `raw_press_releases` | `mart_disclosure_labels`, `public_docs` |
+| LLM 처리 | `pipeline/llm/` | 공시 위험 유형 분류·3줄 요약, 뉴스 감성 분류, 공시·보도자료 청킹·임베딩 | `raw_disclosures`, `raw_press_releases`, `raw_news` | `mart_disclosure_labels`, `mart_news_sentiment`, `public_docs` |
 | 파이프라인 실행 | `pipeline/run_all.py` | 위 단계 순차 실행 | - | - |
-| Backend API | `backend/` | 포트폴리오 입력, 지표 조회, 포트폴리오 지표 계산, 종합평가 리포트 생성·검증, RAG 챗봇, 세션·계정 관리 | DB, VectorDB, LLM API | JSON 응답 |
-| Frontend | `frontend/` | 메인(시장 변동성 배너·한 줄 결론·살펴볼 종목·2×2 위험 지도), 종목 상세, 플로팅 챗봇, 로그인 | Backend API | 화면 |
-| 공통 | `shared/` | 공통 스키마, 설정, 용어 사전 | - | - |
+| Backend API | `backend/` | 포트폴리오 입력, 지표 조회, 포트폴리오 지표 계산, 종합평가 리포트 생성·검증, RAG 챗봇, 세션·계정 관리, 학습 출제·채점·보상(심화) | DB, VectorDB, LLM API | JSON 응답 |
+| Frontend | `frontend/` | 메인(시장 변동성 배너·공포지수·한 줄 결론·살펴볼 종목·2×2 위험 지도), 종목 상세(뉴스 분위기·업종 대장주 비교 포함), 플로팅 챗봇, 로그인, 하루 5분 학습(심화) | Backend API | 화면 |
+| 공통 | `shared/` | 공통 스키마, 설정, 용어 사전, 등급·배너·공포지수 기준값, 상장 규정 기준값 | - | - |
 | DB | `docker-compose.yml`의 `db` | PostgreSQL 16, Docker 볼륨 `db_data`로 영속화 | - | - |
 
 ## 4. 데이터 흐름
@@ -99,6 +100,11 @@ flowchart LR
 | 8 | `score_financial_risk` | 주 (학습은 연 1회) | 보정 확률 → 4단계 등급, 규칙 덮어쓰기, 여유 구간 적용, 모델 버전 기록 |
 | 9 | `classify_disclosures` | 일 | 위험 유형 분류·요약 (LLM) |
 | 10 | `embed_documents` | 일 | 위험 유형 공시·보도자료 청크 임베딩 → `public_docs` |
+| 11 | `collect_news` | 일 | 시장 검색어·전 종목 종목명 뉴스 제목·요약·링크 수집 (네이버 뉴스 검색 API). 과거 분포용 빅카인즈는 1회 |
+| 12 | `collect_analyst` (선택) | 일 | 증권사 투자의견·목표주가 수치 수집 |
+| 13 | `classify_news` | 일 | 종목명 연결 필터, 중복 기사 표시, 긍정·중립·부정 분류 → `mart_news_sentiment` |
+| 14 | `fear_index` | 주 (토요일 결산) | 시장 순부정 비율의 과거 분포 백분위 점수, 종목별 주간 뉴스 분위기 → `mart_fear_index` |
+| 15 | `sector_leaders` | 주 (토요일 결산) | 업종별 시가총액 상위 종목과 1·6개월 수익률 → `mart_sector_leaders` |
 
 - 모든 변수는 공시일 기준으로 정렬해 t 시점 이전 정보만 사용 (라벨 누수 방지)
 - 수집 단계별 실패 로그를 남기고, 실패한 단계 이후의 mart는 직전 값 유지
@@ -166,9 +172,10 @@ sequenceDiagram
 
 | 계층 | 저장 위치 | 대상 |
 |---|---|---|
-| raw | PostgreSQL | `raw_financials`, `raw_disclosures`, `raw_prices`, `raw_delisting`, `raw_press_releases`. 모두 `source`, `collected_at` 컬럼과 UNIQUE 키 |
-| mart | PostgreSQL | `mart_features`, `mart_fin_risk`, `mart_market_risk`, `mart_market_volatility`, `mart_disclosure_labels` |
-| 사용자 | PostgreSQL | `users`(닉네임, 비밀번호 해시), `user_portfolios`(종목·비중), `user_reports`(지표 JSON, 본문, 검증 결과). 로그인 사용자만 |
+| raw | PostgreSQL | `raw_financials`, `raw_disclosures`, `raw_prices`, `raw_delisting`, `raw_press_releases`, `raw_news`, `raw_analyst`(선택). 모두 `source`, `collected_at` 컬럼과 UNIQUE 키 |
+| mart | PostgreSQL | `mart_features`, `mart_fin_risk`, `mart_market_risk`, `mart_market_volatility`, `mart_disclosure_labels`, `mart_news_sentiment`, `mart_fear_index`, `mart_sector_leaders` |
+| 학습 콘텐츠 (심화) | PostgreSQL | `learn_lessons`(단원·개념 카드), `learn_questions`(문항·정답·해설·검수 여부) |
+| 사용자 | PostgreSQL | `users`(닉네임, 비밀번호 해시), `user_portfolios`(종목·비중), `user_reports`(지표 JSON, 본문, 검증 결과), `user_learning`·`user_question_reviews`(학습 기록·복습 일정, 심화). 로그인 사용자만 |
 | 공용 문서 | VectorDB `public_docs` | 공시·보도자료 청크. 메타데이터 `source_type`, `corp_code`, `published_at`, `title`, `url` |
 | 개인 문서 | VectorDB `user_docs` | 로그인 사용자 리포트 청크. 메타데이터 `user_id`, `generated_by` 필수 |
 | 체험 모드 | 서버 세션 메모리 | 포트폴리오, 리포트, 챗봇 대화. 세션 종료·만료 시 삭제 |
@@ -237,3 +244,5 @@ flowchart TB
 | 세션 저장소 | 미정. 서버 메모리는 backend 재시작 시 체험 데이터 소실 | 체험 모드 동작, 세션 만료 정책 |
 | 파이프라인 실행 위치 | 미정. 후보: EC2 cron에서 `run_all.py` 실행, 로컬 실행 후 데이터 이전 | 데이터 자동 갱신(F-23), EC2 사양 |
 | 임베딩 모델 | 미정 (OpenAI 또는 Gemini) | 벡터 차원, 비용 |
+| 뉴스 감성 분류 방식 | 미정 (LLM 또는 금융 특화 한국어 분류 모델, 표본 비교 후 선정) | 공포지수 품질, 비용, pipeline 컨테이너 크기 |
+| 뉴스 출처 이용 조건 | 네이버 뉴스 검색 API 호출 한도, 빅카인즈 과거 기간 미확인 | 공포지수 수집, 기준 분포 기간 |

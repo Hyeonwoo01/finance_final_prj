@@ -147,14 +147,14 @@ CREATE TABLE raw_prices (
 );
 CREATE INDEX idx_raw_prices_date ON raw_prices (trade_date);
 
--- 일별·월별 지표 시계열: KOSPI 지수, 금리, 환율, 해외 지수, VIX, 수출, 투자자별 매매 등
+-- 일별·월별 지표 시계열: KOSPI 지수, 금리, 경기 지표 등
 CREATE TABLE raw_indicators (
-    indicator_code  VARCHAR(40)  NOT NULL,            -- 예: KS11, KTB3Y, CALL, USDKRW, SPX, SOX, US10Y, VIX
+    indicator_code  VARCHAR(40)  NOT NULL,            -- 예: KS11, KTB3Y, CALL
     obs_date        DATE         NOT NULL,
     value           NUMERIC(20, 6) NOT NULL,
     unit            VARCHAR(20),
     frequency       CHAR(1)      NOT NULL DEFAULT 'D', -- D 일 / M 월
-    source          TEXT         NOT NULL,            -- ecos / fdr / fred / krx / kosis
+    source          TEXT         NOT NULL,            -- ecos / fdr
     collected_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
     PRIMARY KEY (indicator_code, obs_date)
 );
@@ -169,6 +169,36 @@ CREATE TABLE raw_press_releases (
     body            TEXT,
     url             TEXT         NOT NULL,
     attachments     JSONB,                            -- [{"name": ..., "url": ...}]
+    collected_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, source_key)
+);
+
+-- 뉴스 제목·요약 (F-31): 네이버 뉴스 검색 API(최근), 빅카인즈(과거 분포용). 본문 미수집
+CREATE TABLE raw_news (
+    source          VARCHAR(20)  NOT NULL,            -- naver / bigkinds
+    url_hash        CHAR(64)     NOT NULL,            -- 원문 링크의 SHA-256 (중복 방지)
+    scope           VARCHAR(10)  NOT NULL CHECK (scope IN ('market', 'stock')),
+    query           TEXT         NOT NULL,            -- 검색어 (시장: 코스피·코스닥·증시 등, 종목: 종목명)
+    stock_code      VARCHAR(12),                      -- 종목 뉴스만
+    title           TEXT         NOT NULL,
+    description     TEXT,                             -- 검색 결과 요약문
+    url             TEXT         NOT NULL,
+    published_at    TIMESTAMPTZ  NOT NULL,
+    collected_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, url_hash, scope, query)
+);
+CREATE INDEX idx_raw_news_stock_date ON raw_news (stock_code, published_at);
+
+-- 증권사 투자의견·목표주가 (F-32, 선택): 수치만 저장, 리포트 본문 미수집
+CREATE TABLE raw_analyst (
+    source          VARCHAR(20)  NOT NULL,            -- 컨센서스 출처 (확정 전)
+    source_key      VARCHAR(60)  NOT NULL,            -- 출처의 리포트 식별자
+    stock_code      VARCHAR(12)  NOT NULL,
+    broker          TEXT         NOT NULL,            -- 증권사
+    published_at    DATE         NOT NULL,
+    opinion         VARCHAR(20),                      -- 매수 / 중립 / 매도 등 원문 표기
+    target_price    NUMERIC(14, 2),
+    prev_target     NUMERIC(14, 2),                   -- 직전 목표주가 (상향·하향 판정)
     collected_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
     PRIMARY KEY (source, source_key)
 );
@@ -253,27 +283,47 @@ CREATE TABLE mart_market_volatility (
     threshold_version VARCHAR(20)  NOT NULL
 );
 
--- 주가 방향성 예측 입력 변수 (F-30): 시장 단위(KS11)와 종목 단위
-CREATE TABLE mart_direction_features (
-    scope           VARCHAR(10)  NOT NULL CHECK (scope IN ('market', 'stock')),
-    target_code     VARCHAR(12)  NOT NULL,            -- 시장 단위는 KS11, 종목 단위는 종목코드
-    base_date       DATE         NOT NULL,            -- 주간 결산 기준일
-    feature_version VARCHAR(20)  NOT NULL,
-    features        JSONB        NOT NULL,
-    PRIMARY KEY (scope, target_code, base_date, feature_version)
+-- 뉴스 감성 분류 (F-31): 기사 1건당 긍정 / 중립 / 부정
+CREATE TABLE mart_news_sentiment (
+    source          VARCHAR(20)  NOT NULL,
+    url_hash        CHAR(64)     NOT NULL,
+    sentiment       VARCHAR(10)  NOT NULL CHECK (sentiment IN ('positive', 'neutral', 'negative')),
+    classifier      VARCHAR(50)  NOT NULL,            -- LLM 모델명 또는 분류 모델명
+    classifier_version VARCHAR(20) NOT NULL,          -- 프롬프트·모델 버전
+    is_duplicate    BOOLEAN      NOT NULL DEFAULT FALSE, -- 같은 사건의 중복 기사
+    classified_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, url_hash, classifier_version)
 );
 
--- 주가 방향성 예측 결과 (F-30): 다음 4주 상승 확률
-CREATE TABLE mart_direction_pred (
+-- 공포지수 (F-31, F-32), 매주 토요일 결산
+-- - 시장 단위는 target_code = 'MARKET', 종목 단위는 종목코드
+CREATE TABLE mart_fear_index (
     scope           VARCHAR(10)  NOT NULL CHECK (scope IN ('market', 'stock')),
     target_code     VARCHAR(12)  NOT NULL,
+    base_date       DATE         NOT NULL,            -- 결산 기준일 (그 주 마지막 거래일)
+    pos_count       INTEGER      NOT NULL,
+    neu_count       INTEGER      NOT NULL,
+    neg_count       INTEGER      NOT NULL,
+    net_negative    REAL,                             -- (부정 - 긍정) / 전체, 건수 부족 시 NULL
+    news_score      REAL,                             -- 시장 단위: 과거 분포 내 백분위 (0~100)
+    analyst_score   REAL,                             -- 시장 단위 목표주가 하향 비율 백분위 (F-32, 선택)
+    fear_score      REAL,                             -- 시장 단위 최종 점수 (0~100, 높을수록 공포)
+    change_vs_4w    REAL,                             -- 종목 단위: 직전 4주 평균 대비 순부정 비율 변화
+    status          VARCHAR(20)  NOT NULL,            -- ok / 뉴스 적음 / 수집 실패
+    threshold_version VARCHAR(20) NOT NULL,
+    PRIMARY KEY (scope, target_code, base_date)
+);
+
+-- 업종 대장주 비교 (F-33), 매주 토요일 결산
+CREATE TABLE mart_sector_leaders (
     base_date       DATE         NOT NULL,
-    horizon_weeks   SMALLINT     NOT NULL DEFAULT 4,
-    model_version   VARCHAR(20)  NOT NULL,
-    prob_up         REAL         NOT NULL,
-    hist_hit_rate   REAL,                             -- 과거 같은 신호에서의 적중률
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    PRIMARY KEY (scope, target_code, base_date, horizon_weeks, model_version)
+    sector_code     VARCHAR(20)  NOT NULL,            -- 기업기본정보 업종 (분류 수준 확정 전)
+    rank            SMALLINT     NOT NULL,            -- 업종 내 시가총액 순위
+    stock_code      VARCHAR(12)  NOT NULL,
+    market_cap      NUMERIC(20, 0) NOT NULL,
+    return_1m       REAL,
+    return_6m       REAL,
+    PRIMARY KEY (base_date, sector_code, rank)
 );
 
 -- 공시 위험 유형 분류·요약 (F-06)
@@ -291,6 +341,31 @@ CREATE TABLE glossary (
     term            TEXT         PRIMARY KEY,
     explanation     TEXT         NOT NULL,
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- 하루 5분 학습 단원·개념 카드 (F-34, 심화)
+CREATE TABLE learn_lessons (
+    lesson_id       BIGINT       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    unit_no         SMALLINT     NOT NULL,            -- 단원 번호
+    seq             SMALLINT     NOT NULL,            -- 단원 안 순서
+    title           TEXT         NOT NULL,
+    cards           JSONB        NOT NULL,            -- 개념 카드 2~3장 [{"term": ..., "body": ...}]
+    terms           TEXT[],                           -- 연결 용어 (glossary.term), 내 종목 연결 카드에 사용
+    UNIQUE (unit_no, seq)
+);
+
+-- 하루 5분 학습 퀴즈 문항 (F-34, 심화): 검수 완료 문항만 출제
+CREATE TABLE learn_questions (
+    question_id     BIGINT       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    lesson_id       BIGINT       NOT NULL REFERENCES learn_lessons (lesson_id) ON DELETE CASCADE,
+    qtype           VARCHAR(10)  NOT NULL CHECK (qtype IN ('choice', 'ox', 'blank')),
+    prompt          TEXT         NOT NULL,
+    choices         JSONB,                            -- 객관식 보기
+    answer          TEXT         NOT NULL,
+    explanation     TEXT         NOT NULL,
+    drafted_by      VARCHAR(50)  NOT NULL,            -- team 또는 LLM 모델명
+    reviewed        BOOLEAN      NOT NULL DEFAULT FALSE,
+    reviewed_at     TIMESTAMPTZ
 );
 
 
@@ -339,6 +414,29 @@ CREATE TABLE sessions (
     expires_at      TIMESTAMPTZ  NOT NULL
 );
 CREATE INDEX idx_sessions_expires ON sessions (expires_at);  -- 만료 세션 정리용
+
+-- 학습 기록 (F-34, 심화): 로그인 사용자만 저장
+CREATE TABLE user_learning (
+    user_id         BIGINT       PRIMARY KEY REFERENCES users (user_id) ON DELETE CASCADE,
+    xp              INTEGER      NOT NULL DEFAULT 0,  -- 경험치
+    level           SMALLINT     NOT NULL DEFAULT 1,
+    streak_days     INTEGER      NOT NULL DEFAULT 0,  -- 연속 학습일 (규칙 확정 전)
+    last_learned_on DATE,
+    badges          JSONB        NOT NULL DEFAULT '[]', -- [{"code": ..., "earned_on": ...}]
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- 문항별 풀이·복습 일정 (F-34, 심화): 틀린 문제는 1·3·7일 뒤 다시 출제
+CREATE TABLE user_question_reviews (
+    user_id         BIGINT       NOT NULL REFERENCES users (user_id) ON DELETE CASCADE,
+    question_id     BIGINT       NOT NULL REFERENCES learn_questions (question_id) ON DELETE CASCADE,
+    last_answered_on DATE        NOT NULL,
+    last_correct    BOOLEAN      NOT NULL,
+    review_step     SMALLINT     NOT NULL DEFAULT 0,  -- 0: 복습 없음, 1·2·3: 1·3·7일 단계
+    next_review_on  DATE,
+    PRIMARY KEY (user_id, question_id)
+);
+CREATE INDEX idx_user_question_reviews_due ON user_question_reviews (user_id, next_review_on);
 
 -- 사용자별 일일 LLM 요청 수 (LLM_DAILY_REQUEST_LIMIT)
 CREATE TABLE llm_usage (
